@@ -18,6 +18,14 @@ Layout
 
 import tkinter as tk
 from tkinter import ttk
+# Optional Pillow support for image resizing
+try:
+    from PIL import Image, ImageTk
+    PIL_AVAILABLE = True
+except Exception:
+    Image = None
+    ImageTk = None
+    PIL_AVAILABLE = False
 from datetime import datetime
 import logging
 from typing import Callable, Optional, List
@@ -43,6 +51,9 @@ class Dashboard(tk.Frame):
         open_queue_cb: Optional[Callable[[], None]] = None,
         open_admin_cb: Optional[Callable[[], None]] = None,
         open_counters_cb: Optional[Callable[[], None]] = None,
+        show_navigation: bool = True,
+        app_name_var: Optional[tk.StringVar] = None,
+        app_logo_var: Optional[tk.StringVar] = None,
         **kwargs
     ) -> None:
 
@@ -52,8 +63,11 @@ class Dashboard(tk.Frame):
         self._open_queue = open_queue_cb
         self._open_admin = open_admin_cb
         self._open_counters = open_counters_cb
+        self._show_navigation = show_navigation
         self._clock_label: Optional[tk.Label] = None
         self._clock_after_id: Optional[str] = None
+        self._app_name_var: Optional[tk.StringVar] = app_name_var
+        self._app_logo_var: Optional[tk.StringVar] = app_logo_var
 
         try:
             self._build()
@@ -74,14 +88,84 @@ class Dashboard(tk.Frame):
         bar.pack(fill="x")
 
         # Left – logo / title
+        # Logo (optional) and title use shared StringVars so they update
+        self._logo_image = None
+        logo_lbl = tk.Label(bar, bg=THEME["bg_card"])
+        logo_lbl.pack(side="left", padx=(THEME["pad"], 8))
+
+        # Title label
+        title_text = f"  ◈  {self._app_name_var.get()}" if self._app_name_var else "  ◈  QueueFlow"
+        self._title_var = tk.StringVar(value=title_text)
+        if self._app_name_var is not None:
+            try:
+                self._app_name_var.trace_add("write", lambda *a: self._title_var.set(f"  ◈  {self._app_name_var.get()}"))
+            except Exception:
+                pass
         tk.Label(
             bar,
-            text="  ◈  QueueFlow",
+            textvariable=self._title_var,
             font=("Segoe UI", 16, "bold"),
             fg=THEME["accent"],
             bg=THEME["bg_card"],
             pady=14,
-        ).pack(side="left", padx=THEME["pad"])
+        ).pack(side="left", padx=0)
+
+        # Update logo when app_logo_var changes
+        def _update_logo(*a):
+            path = (self._app_logo_var.get() if self._app_logo_var else "")
+            try:
+                if path:
+                    # Desired maximum logo size in header
+                    max_h = 48
+                    max_w = 240
+                    if PIL_AVAILABLE:
+                        try:
+                            im = Image.open(path)
+                            w, h = im.size
+                            # Scale keeping aspect ratio to fit within max_w x max_h
+                            ratio = min(1.0, float(max_w) / max(1, w), float(max_h) / max(1, h))
+                            if ratio < 1.0:
+                                new_w = max(1, int(w * ratio))
+                                new_h = max(1, int(h * ratio))
+                                im = im.resize((new_w, new_h), Image.LANCZOS)
+                            img = ImageTk.PhotoImage(im)
+                        except Exception:
+                            img = tk.PhotoImage(file=path)
+                            # fallback resize using subsample if too large
+                            try:
+                                w, h = img.width(), img.height()
+                                factor = max(1, int(max(1, h) / max_h), int(max(1, w) / max_w))
+                                if factor > 1:
+                                    img = img.subsample(factor, factor)
+                            except Exception:
+                                pass
+                    else:
+                        img = tk.PhotoImage(file=path)
+                        try:
+                            w, h = img.width(), img.height()
+                            factor = max(1, int(max(1, h) / max_h), int(max(1, w) / max_w))
+                            if factor > 1:
+                                img = img.subsample(factor, factor)
+                        except Exception:
+                            pass
+                    # Keep a reference to avoid GC
+                    self._logo_image = img
+                    logo_lbl.config(image=self._logo_image, text="")
+                else:
+                    logo_lbl.config(image="", text="")
+                    self._logo_image = None
+            except Exception:
+                # If loading fails, clear image
+                logo_lbl.config(image="", text="")
+                self._logo_image = None
+
+        if self._app_logo_var is not None:
+            try:
+                self._app_logo_var.trace_add("write", _update_logo)
+            except Exception:
+                pass
+        # Initialize logo now
+        _update_logo()
 
         # Right – clock + nav buttons
         right = tk.Frame(bar, bg=THEME["bg_card"])
@@ -95,12 +179,13 @@ class Dashboard(tk.Frame):
         )
         self._clock_label.pack(side="left", padx=(0, 16))
 
-        StyledButton(right, "＋  New Ticket",  preset="primary",
-                     command=self._open_queue).pack(side="left", padx=4)
-        StyledButton(right, "⚙  Counters", preset="muted",
-                     command=self._open_counters).pack(side="left", padx=4)
-        StyledButton(right, "⚙  Admin Panel", preset="muted",
-                     command=self._open_admin).pack(side="left", padx=4)
+        if self._show_navigation:
+            StyledButton(right, "＋  New Ticket",  preset="primary",
+                         command=self._open_queue).pack(side="left", padx=4)
+            StyledButton(right, "⚙  Counters", preset="muted",
+                         command=self._open_counters).pack(side="left", padx=4)
+            StyledButton(right, "⚙  Admin Panel", preset="muted",
+                         command=self._open_admin).pack(side="left", padx=4)
 
         Divider(self).pack(fill="x")
 
@@ -139,14 +224,6 @@ class Dashboard(tk.Frame):
                 bg=THEME["bg_dark"],
                 justify="center"
             ).pack(pady=20)
-            
-            # Mini stats
-            stats_frame = tk.Frame(panel, bg=THEME["bg_dark"])
-            stats_frame.pack(fill="x", pady=(16, 0))
-            waiting_count = sum(1 for t in self.tickets if t["status"] == "waiting")
-            completed_count = sum(1 for t in self.tickets if t["status"] == "completed")
-            self._mini_stat(stats_frame, str(waiting_count), "Waiting")
-            self._mini_stat(stats_frame, str(completed_count), "Done")
             return
         
         # Create scrollable area for counters
@@ -172,13 +249,6 @@ class Dashboard(tk.Frame):
         for counter in active_counters:
             self._draw_counter_card(inner, counter)
         
-        # Mini stats at bottom
-        stats_frame = tk.Frame(panel, bg=THEME["bg_dark"])
-        stats_frame.pack(fill="x", pady=(12, 0))
-        waiting_count = sum(1 for t in self.tickets if t["status"] == "waiting")
-        completed_count = sum(1 for t in self.tickets if t["status"] == "completed")
-        self._mini_stat(stats_frame, str(waiting_count), "Waiting")
-        self._mini_stat(stats_frame, str(completed_count), "Done")
     
     def _draw_counter_card(self, parent, counter: Counter):
         """Draw a single counter card."""
@@ -189,7 +259,7 @@ class Dashboard(tk.Frame):
         tk.Label(
             card,
             text=counter.counter_name,
-            font=("Segoe UI", 12, "bold"),
+            font=("Segoe UI", 14, "bold"),
             fg=THEME["accent"],
             bg=THEME["bg_card"],
         ).pack(anchor="w")
@@ -199,7 +269,7 @@ class Dashboard(tk.Frame):
             tk.Label(
                 card,
                 text=counter.department,
-                font=("Segoe UI", 9),
+                font=("Segoe UI", 10),
                 fg=THEME["text_dim"],
                 bg=THEME["bg_card"],
             ).pack(anchor="w")
@@ -212,26 +282,26 @@ class Dashboard(tk.Frame):
                 tk.Label(
                     card,
                     text=f"{priority_icon} Serving: {ticket.get('number', '—')}",
-                    font=("Segoe UI", 10),
+                    font=("Segoe UI", 12),
                     fg=THEME["success"],
                     bg=THEME["bg_card"],
-                ).pack(anchor="w", pady=(6, 0))
+                ).pack(anchor="w", pady=(8, 0))
             else:
                 tk.Label(
                     card,
                     text="• No ticket assigned",
-                    font=("Segoe UI", 9),
+                    font=("Segoe UI", 11),
                     fg=THEME["text_dim"],
                     bg=THEME["bg_card"],
-                ).pack(anchor="w", pady=(6, 0))
+                ).pack(anchor="w", pady=(8, 0))
         else:
             tk.Label(
                 card,
                 text="• Idle - Ready for next customer",
-                font=("Segoe UI", 9),
+                font=("Segoe UI", 11),
                 fg=THEME["text_dim"],
                 bg=THEME["bg_card"],
-            ).pack(anchor="w", pady=(6, 0))
+            ).pack(anchor="w", pady=(8, 0))
         
         # Operator and stats
         info_text = f"Served today: {counter.tickets_served_today}"
@@ -241,10 +311,10 @@ class Dashboard(tk.Frame):
         tk.Label(
             card,
             text=info_text,
-            font=("Segoe UI", 8),
+            font=("Segoe UI", 9),
             fg=THEME["text_dim"],
             bg=THEME["bg_card"],
-        ).pack(anchor="w", pady=(4, 0))
+        ).pack(anchor="w", pady=(6, 0))
     
     def _get_priority_icon(self, priority: str) -> str:
         """Get emoji icon for priority."""

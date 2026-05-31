@@ -35,10 +35,21 @@ class StyledButton(tk.Button):
         "muted":   (THEME["bg_input"],     THEME["border"],        THEME["text_dim"]),
     }
 
+    @classmethod
+    def refresh_presets(cls):
+        cls.PRESETS = {
+            "primary": (THEME["accent"],       THEME["accent_hover"],  THEME["text"]),
+            "success": (THEME["success"],      "#27AE60",              THEME["text"]),
+            "danger":  (THEME["danger"],       THEME["danger_hover"],  THEME["text"]),
+            "warning": (THEME["warning"],      "#D68910",              THEME["text"]),
+            "muted":   (THEME["bg_input"],     THEME["border"],        THEME["text_dim"]),
+        }
+
     def __init__(self, master, text="", preset="primary", command=None,
                  width=None, **kwargs):
         bg, hover_bg, fg = self.PRESETS.get(preset, self.PRESETS["primary"])
-        self._bg       = bg
+        self._preset = preset
+        self._bg = bg
         self._hover_bg = hover_bg
 
         opts = dict(
@@ -62,6 +73,13 @@ class StyledButton(tk.Button):
 
         self.bind("<Enter>", lambda _: self.config(bg=self._hover_bg))
         self.bind("<Leave>", lambda _: self.config(bg=self._bg))
+
+    def refresh_style(self):
+        """Refresh the button colours when the global theme changes."""
+        bg, hover_bg, fg = self.PRESETS.get(self._preset, self.PRESETS["primary"])
+        self._bg = bg
+        self._hover_bg = hover_bg
+        self.config(bg=bg, fg=fg, activebackground=hover_bg, activeforeground=fg)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

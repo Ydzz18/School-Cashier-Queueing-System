@@ -25,11 +25,13 @@ Usage:
 """
 
 # Export design system and widgets
-from .theme import THEME
+from .theme import THEME, apply_theme_mode, refresh_widget_theme
 from .widgets import StyledButton, TicketCard, StatusBadge, SectionHeader, Divider
 
 __all__ = [
     "THEME",
+    "apply_theme_mode",
+    "refresh_widget_theme",
     "StyledButton",
     "TicketCard",
     "StatusBadge",

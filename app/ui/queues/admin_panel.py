@@ -35,7 +35,7 @@ ticket management capabilities for staff members.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
 import copy
 import hashlib
@@ -45,7 +45,17 @@ import logging
 from typing import Callable, Optional
 
 from .components import THEME, StyledButton, Divider, SectionHeader, StatusBadge
+from .counter_config import CounterConfigDialog
 from app.services.counter_service import CounterService
+
+# Optional Pillow support for image resizing
+try:
+    from PIL import Image, ImageTk
+    PIL_AVAILABLE = True
+except Exception:
+    Image = None
+    ImageTk = None
+    PIL_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -513,9 +523,18 @@ class AdminPanel(tk.Toplevel):
         self,
         parent,
         tickets: list = None,
+        daily_ticket_limit: int = None,
         on_change=None,
         counter_service: Optional[CounterService] = None,
         on_counters_change: Optional[Callable] = None,
+        on_limit_change: Optional[Callable[[int], None]] = None,
+        on_app_name_change: Optional[Callable[[str], None]] = None,
+        on_theme_mode_change: Optional[Callable[[str], None]] = None,
+        app_name: str = "QueueFlow",
+        app_name_var: Optional[tk.StringVar] = None,
+        app_logo_var: Optional[tk.StringVar] = None,
+        on_app_logo_change: Optional[Callable[[str], None]] = None,
+        theme_mode: str = "dark",
         **kwargs
     ):
         # First authenticate
@@ -533,7 +552,6 @@ class AdminPanel(tk.Toplevel):
         self.title("Admin Panel – Queue Management")
         self.geometry("900x650")
         self.configure(bg=THEME["bg_dark"])
-        self.grab_set()
         
         # Work on a deep copy so caller controls when it's applied
         self._tickets  = copy.deepcopy(tickets or [])
@@ -545,7 +563,24 @@ class AdminPanel(tk.Toplevel):
         self._current_number_var = tk.StringVar(value="—")
         self._current_svc_var    = tk.StringVar(value="No active ticket")
         self._counter_var = tk.StringVar(value="")
-        
+        self._daily_ticket_limit = daily_ticket_limit if daily_ticket_limit is not None else 0
+        self._limit_callback = on_limit_change
+        self._daily_limit_var = tk.StringVar(value=str(self._daily_ticket_limit))
+        self._app_name_change_callback = on_app_name_change
+        self._app_logo_change_callback = on_app_logo_change
+        self._theme_mode_change_callback = on_theme_mode_change
+        # Use provided StringVar to keep headers in sync across windows
+        if app_name_var is not None:
+            self._app_name_var = app_name_var
+        else:
+            self._app_name_var = tk.StringVar(value=app_name)
+        if app_logo_var is not None:
+            self._app_logo_var = app_logo_var
+        else:
+            self._app_logo_var = tk.StringVar(value="")
+        self._theme_mode_var = tk.StringVar(value=theme_mode)
+        self._counter_select_widget = None
+
         self._build()
         self._refresh_table()
         
@@ -569,18 +604,86 @@ class AdminPanel(tk.Toplevel):
             side="left", fill="y", padx=THEME["pad"]
         )
         self._build_table(panes)
+
+    def refresh_theme(self):
+        """Refresh admin panel UI using the active theme."""
+        self.configure(bg=THEME["bg_dark"])
+        for child in self.winfo_children():
+            child.destroy()
+        self._build()
+        self._refresh_table()
     
     def _build_header(self):
         bar = tk.Frame(self, bg=THEME["bg_card"], pady=0)
         bar.pack(fill="x")
-        
-        # Title
+        # Logo + Title
+        self._logo_image = None
+        logo_lbl = tk.Label(bar, bg=THEME["bg_card"])
+        logo_lbl.pack(side="left", padx=(THEME["pad"], 8))
+
+        header_text = f"  ⚙  {self._app_name_var.get()} Admin Panel"
+        self._header_title_var = tk.StringVar(value=header_text)
+        if self._app_name_var is not None:
+            try:
+                self._app_name_var.trace_add("write", lambda *a: self._header_title_var.set(f"  ⚙  {self._app_name_var.get()} Admin Panel"))
+            except Exception:
+                pass
         tk.Label(
-            bar, text="  ⚙  Admin Panel",
+            bar, textvariable=self._header_title_var,
             font=("Segoe UI", 15, "bold"),
             fg=THEME["text"], bg=THEME["bg_card"],
             pady=14,
-        ).pack(side="left", padx=THEME["pad"])
+        ).pack(side="left", padx=0)
+
+        def _update_logo(*a):
+            path = (self._app_logo_var.get() if self._app_logo_var else "")
+            try:
+                if path:
+                    max_h = 48
+                    max_w = 240
+                    if PIL_AVAILABLE:
+                        try:
+                            im = Image.open(path)
+                            w, h = im.size
+                            ratio = min(1.0, float(max_w) / max(1, w), float(max_h) / max(1, h))
+                            if ratio < 1.0:
+                                new_w = max(1, int(w * ratio))
+                                new_h = max(1, int(h * ratio))
+                                im = im.resize((new_w, new_h), Image.LANCZOS)
+                            img = ImageTk.PhotoImage(im)
+                        except Exception:
+                            img = tk.PhotoImage(file=path)
+                            try:
+                                w, h = img.width(), img.height()
+                                factor = max(1, int(max(1, h) / max_h), int(max(1, w) / max_w))
+                                if factor > 1:
+                                    img = img.subsample(factor, factor)
+                            except Exception:
+                                pass
+                    else:
+                        img = tk.PhotoImage(file=path)
+                        try:
+                            w, h = img.width(), img.height()
+                            factor = max(1, int(max(1, h) / max_h), int(max(1, w) / max_w))
+                            if factor > 1:
+                                img = img.subsample(factor, factor)
+                        except Exception:
+                            pass
+                    self._logo_image = img
+                    logo_lbl.config(image=self._logo_image)
+                else:
+                    logo_lbl.config(image="")
+                    self._logo_image = None
+            except Exception:
+                logo_lbl.config(image="")
+                self._logo_image = None
+
+        if self._app_logo_var is not None:
+            try:
+                self._app_logo_var.trace_add("write", _update_logo)
+            except Exception:
+                pass
+        _update_logo()
         
         # Admin info and buttons
         right_frame = tk.Frame(bar, bg=THEME["bg_card"])
@@ -616,9 +719,26 @@ class AdminPanel(tk.Toplevel):
         Divider(self).pack(fill="x")
     
     def _build_sidebar(self, parent):
-        side = tk.Frame(parent, bg=THEME["bg_dark"], width=220)
-        side.pack(side="left", fill="y")
-        side.pack_propagate(False)
+        # Create a scrollable left column container
+        side_container = tk.Frame(parent, bg=THEME["bg_dark"], width=220)
+        side_container.pack(side="left", fill="y")
+        side_container.pack_propagate(False)
+
+        canvas = tk.Canvas(side_container, bg=THEME["bg_dark"], highlightthickness=0)
+        vscroll = ttk.Scrollbar(side_container, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vscroll.set)
+        vscroll.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        side = tk.Frame(canvas, bg=THEME["bg_dark"], width=220)
+        win = canvas.create_window((0, 0), window=side, anchor="nw")
+        def _on_resize(e):
+            try:
+                canvas.itemconfig(win, width=e.width)
+            except Exception:
+                pass
+        canvas.bind("<Configure>", _on_resize)
+        side.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         
         SectionHeader(side, "NOW SERVING").pack(anchor="w", pady=(0, 10))
         
@@ -634,8 +754,6 @@ class AdminPanel(tk.Toplevel):
         
         tk.Frame(side, bg=THEME["bg_dark"], height=16).pack()
         
-        SectionHeader(side, "ACTIONS").pack(anchor="w", pady=(0, 8))
-
         if self.counter_service:
             active_counters = self.counter_service.get_all_counters(active_only=True)
             self._counter_ids_by_label = {
@@ -652,13 +770,14 @@ class AdminPanel(tk.Toplevel):
                     fg=THEME["text_dim"],
                     bg=THEME["bg_dark"],
                 ).pack(anchor="w", pady=(0, 3))
-                ttk.Combobox(
+                self._counter_select_widget = ttk.Combobox(
                     side,
                     textvariable=self._counter_var,
                     values=counter_labels,
                     state="readonly",
                     width=24,
-                ).pack(fill="x", pady=(0, 8))
+                )
+                self._counter_select_widget.pack(fill="x", pady=(0, 8))
             else:
                 self._counter_ids_by_label = {}
                 tk.Label(
@@ -669,15 +788,104 @@ class AdminPanel(tk.Toplevel):
                     bg=THEME["bg_dark"],
                     wraplength=190,
                 ).pack(anchor="w", pady=(0, 8))
+
+        if self.counter_service:
+            StyledButton(side, "+ Add Counter", preset="primary",
+                         command=self._open_counter_config).pack(fill="x", pady=8)
+
+        SectionHeader(side, "SETTINGS").pack(anchor="w", pady=(16, 8))
+        tk.Label(
+            side,
+            text="Daily Ticket Limit",
+            font=THEME["font_label"],
+            fg=THEME["text_dim"],
+            bg=THEME["bg_dark"],
+        ).pack(anchor="w", pady=(0, 4))
+        tk.Entry(
+            side,
+            textvariable=self._daily_limit_var,
+            bg=THEME["bg_input"],
+            fg=THEME["text"],
+            relief="flat",
+            highlightthickness=1,
+            highlightcolor=THEME["accent"],
+            highlightbackground=THEME["border"],
+        ).pack(fill="x", pady=(0, 8))
+        StyledButton(
+            side,
+            "Save Limit",
+            preset="muted",
+            command=self._save_daily_limit,
+        ).pack(fill="x")
         
-        StyledButton(side, "▶  Call Next",   preset="primary",
-                     command=self._call_next).pack(fill="x", pady=3)
-        StyledButton(side, "↩  Recall",      preset="warning",
-                     command=self._recall).pack(fill="x", pady=3)
-        StyledButton(side, "✗  Skip",        preset="danger",
-                     command=self._skip_current).pack(fill="x", pady=3)
-        StyledButton(side, "✔  Complete",    preset="success",
-                     command=self._complete_current).pack(fill="x", pady=3)
+        SectionHeader(side, "APPLICATION").pack(anchor="w", pady=(16, 8))
+        tk.Label(
+            side,
+            text="App Name",
+            font=THEME["font_label"],
+            fg=THEME["text_dim"],
+            bg=THEME["bg_dark"],
+        ).pack(anchor="w", pady=(0, 4))
+        tk.Entry(
+            side,
+            textvariable=self._app_name_var,
+            bg=THEME["bg_input"],
+            fg=THEME["text"],
+            relief="flat",
+            highlightthickness=1,
+            highlightcolor=THEME["accent"],
+            highlightbackground=THEME["border"],
+        ).pack(fill="x", pady=(0, 8))
+        StyledButton(
+            side,
+            "Save App Name",
+            preset="primary",
+            command=self._save_app_name,
+        ).pack(fill="x", pady=(0, 8))
+
+        # Logo selector
+        tk.Label(
+            side,
+            text="Logo",
+            font=THEME["font_label"],
+            fg=THEME["text_dim"],
+            bg=THEME["bg_dark"],
+        ).pack(anchor="w", pady=(8, 4))
+        tk.Entry(
+            side,
+            textvariable=self._app_logo_var,
+            bg=THEME["bg_input"],
+            fg=THEME["text"],
+            relief="flat",
+            highlightthickness=1,
+            highlightcolor=THEME["accent"],
+            highlightbackground=THEME["border"],
+        ).pack(fill="x", pady=(0, 6))
+        StyledButton(side, "Choose Logo", preset="muted", command=self._choose_logo).pack(fill="x", pady=(0, 6))
+        StyledButton(side, "Save Logo", preset="primary", command=self._save_app_logo).pack(fill="x", pady=(0, 8))
+
+        tk.Label(
+            side,
+            text="Theme Mode",
+            font=THEME["font_label"],
+            fg=THEME["text_dim"],
+            bg=THEME["bg_dark"],
+        ).pack(anchor="w", pady=(0, 4))
+        theme_modes = ["light", "dark"]
+        self._theme_select_widget = ttk.Combobox(
+            side,
+            textvariable=self._theme_mode_var,
+            values=theme_modes,
+            state="readonly",
+            width=24,
+        )
+        self._theme_select_widget.pack(fill="x", pady=(0, 8))
+        StyledButton(
+            side,
+            "Apply Theme",
+            preset="success",
+            command=self._save_theme_mode,
+        ).pack(fill="x")
         
         # Stats
         tk.Frame(side, bg=THEME["bg_dark"], height=16).pack()
@@ -747,21 +955,23 @@ class AdminPanel(tk.Toplevel):
             self._tree.heading(col, text=heading)
             self._tree.column(col, width=width, anchor="center")
         
+        # Right-side action column (vertical buttons)
+        action_col = tk.Frame(right, bg=THEME["bg_dark"], width=160)
+        action_col.pack(side="right", fill="y", padx=(THEME["pad"], 0))
+        action_col.pack_propagate(False)
+
         scroll = ttk.Scrollbar(right, orient="vertical", command=self._tree.yview)
         self._tree.configure(yscrollcommand=scroll.set)
-        
         scroll.pack(side="right", fill="y")
         self._tree.pack(side="left", fill="both", expand=True)
-        
-        # Row action buttons at bottom
-        btn_row = tk.Frame(right, bg=THEME["bg_dark"], pady=8)
-        btn_row.pack(fill="x")
-        StyledButton(btn_row, "Call Selected",     preset="primary",
-                     command=self._call_selected).pack(side="left", padx=(0, 6))
-        StyledButton(btn_row, "Skip Selected",     preset="danger",
-                     command=self._skip_selected).pack(side="left", padx=(0, 6))
-        StyledButton(btn_row, "Complete Selected", preset="success",
-                     command=self._complete_selected).pack(side="left")
+
+        # Vertical stacked buttons for ticket actions
+        StyledButton(action_col, "Call Selected", preset="primary",
+                 command=self._call_selected).pack(fill="x", pady=(12, 6), padx=8)
+        StyledButton(action_col, "Skip Selected", preset="danger",
+                 command=self._skip_selected).pack(fill="x", pady=6, padx=8)
+        StyledButton(action_col, "Complete Selected", preset="success",
+                 command=self._complete_selected).pack(fill="x", pady=6, padx=8)
     
     # ── Authentication methods ─────────────────────────────────────────────────
     def _change_password(self):
@@ -797,10 +1007,120 @@ class AdminPanel(tk.Toplevel):
             return None
         return getattr(self, "_counter_ids_by_label", {}).get(self._counter_var.get())
 
-    def _notify_counters_changed(self) -> None:
+    def _notify_counters_changed(self, updated_counters=None) -> None:
         """Notify the parent window that counter state has changed."""
         if self.counter_service and callable(self._counters_callback):
-            self._counters_callback(self.counter_service.get_all_counters())
+            self._counters_callback(updated_counters or self.counter_service.get_all_counters())
+
+    def _refresh_counter_selection(self) -> None:
+        """Refresh the counter dropdown options after configuration changes."""
+        if not self.counter_service or self._counter_select_widget is None:
+            return
+
+        active_counters = self.counter_service.get_all_counters(active_only=True)
+        self._counter_ids_by_label = {
+            self._counter_label(counter): counter.counter_id
+            for counter in active_counters
+        }
+        counter_labels = list(self._counter_ids_by_label)
+        self._counter_select_widget['values'] = counter_labels
+
+        if counter_labels:
+            self._counter_var.set(counter_labels[0])
+        else:
+            self._counter_var.set("")
+
+    def _open_counter_config(self) -> None:
+        """Open the counter configuration dialog."""
+        dialog = CounterConfigDialog(
+            self,
+            self.counter_service,
+            on_counters_changed=self._notify_counters_changed,
+        )
+        self.wait_window(dialog)
+        self._refresh_counter_selection()
+
+    def _save_daily_limit(self) -> None:
+        """Save the daily ticket limit from admin settings."""
+        value = self._daily_limit_var.get().strip()
+        if not value.isdigit():
+            messagebox.showwarning("Invalid Limit", "Please enter a valid number.", parent=self)
+            return
+
+        limit = int(value)
+        if limit < 1:
+            messagebox.showwarning("Invalid Limit", "Daily ticket limit must be at least 1.", parent=self)
+            return
+
+        self._daily_ticket_limit = limit
+        if callable(self._limit_callback):
+            self._limit_callback(limit)
+
+        messagebox.showinfo("Saved", f"Daily ticket limit set to {limit}.", parent=self)
+
+    def _choose_logo(self) -> None:
+        """Open file dialog to choose a logo image file."""
+        path = filedialog.askopenfilename(
+            parent=self,
+            title="Choose Logo Image",
+            filetypes=[
+                ("PNG Images", "*.png"),
+                ("GIF Images", "*.gif"),
+                ("All Images", "*.png;*.gif;*.ico;*.ppm;*.pgm"),
+            ],
+        )
+        if path:
+            try:
+                self._app_logo_var.set(path)
+            except Exception:
+                pass
+
+    def _save_app_logo(self) -> None:
+        """Save the chosen app logo path via callback."""
+        path = (self._app_logo_var.get() or "").strip()
+        if not path:
+            # Allow clearing logo
+            if callable(self._app_logo_change_callback):
+                self._app_logo_change_callback("")
+            messagebox.showinfo("Saved", "Application logo cleared.", parent=self)
+            return
+
+        # Basic validation: try to load
+        try:
+            if PIL_AVAILABLE:
+                try:
+                    im = Image.open(path)
+                    im.verify()
+                except Exception:
+                    # Fallback to tk.PhotoImage
+                    tk.PhotoImage(file=path)
+            else:
+                tk.PhotoImage(file=path)
+        except Exception:
+            messagebox.showwarning("Invalid Image", "Could not load the selected image file.", parent=self)
+            return
+
+        if callable(self._app_logo_change_callback):
+            self._app_logo_change_callback(path)
+        messagebox.showinfo("Saved", "Application logo updated.", parent=self)
+
+    def _save_app_name(self):
+        name = self._app_name_var.get().strip()
+        if not name:
+            messagebox.showwarning("Invalid App Name", "Please enter an application name.", parent=self)
+            return
+        if callable(self._app_name_change_callback):
+            self._app_name_change_callback(name)
+        messagebox.showinfo("Saved", f"Application name updated to {name}.", parent=self)
+
+    def _save_theme_mode(self):
+        mode = self._theme_mode_var.get().strip().lower()
+        if mode not in ("light", "dark"):
+            messagebox.showwarning("Invalid Theme", "Please select Light or Dark mode.", parent=self)
+            return
+        if callable(self._theme_mode_change_callback):
+            self._theme_mode_change_callback(mode)
+        messagebox.showinfo("Saved", f"Theme mode set to {mode}.", parent=self)
 
     def _assign_to_selected_counter(self, ticket: dict) -> None:
         """Assign a called ticket to the selected counter."""
@@ -859,8 +1179,8 @@ class AdminPanel(tk.Toplevel):
                 ),
             )
         
-        # Update serving card
-        active = next((t for t in self._tickets if t["status"] == "called"), None)
+        # Update serving card for the selected counter
+        active = self._selected_counter_ticket() or next((t for t in self._tickets if t["status"] == "called"), None)
         if active:
             priority_icon = {
                 "PWD": "⭐",
@@ -875,23 +1195,61 @@ class AdminPanel(tk.Toplevel):
             self._current_svc_var.set("No active ticket")
         
         self._render_stats()
+
+    def update_tickets(self, tickets: list):
+        """Update the admin panel ticket list and refresh the view."""
+        self._tickets = copy.deepcopy(tickets or [])
+        self._refresh_table()
+
+    def _notify_ticket_change(self):
+        """Notify the application about ticket state changes made in the admin panel."""
         if callable(self._callback):
             self._callback(copy.deepcopy(self._tickets))
+
+    def update_counters(self, counters: list):
+        """Refresh the admin panel view after counters change."""
+        # CounterService is shared, so just refresh the display.
+        self._refresh_table()
+
+    def update_daily_limit(self, daily_limit: int):
+        """Update the daily ticket limit display in the admin panel."""
+        self._daily_ticket_limit = daily_limit
+        self._daily_limit_var.set(str(daily_limit))
+        self._refresh_table()
     
     # ── Ticket mutation helpers ────────────────────────────────────────────────
-    def _find(self, status) -> dict | None:
+    def _find(self, status, counter_id: str = None) -> dict | None:
+        if self.counter_service:
+            if not counter_id:
+                counter_id = self._selected_counter_id()
+            if counter_id:
+                counter = self.counter_service.get_counter(counter_id)
+                if counter and counter.current_ticket_id:
+                    ticket = next((t for t in self._tickets if t["number"] == counter.current_ticket_id), None)
+                    if ticket and ticket["status"] == status:
+                        return ticket
         return next((t for t in self._tickets if t["status"] == status), None)
-    
+
+    def _selected_counter_ticket(self) -> dict | None:
+        counter_id = self._selected_counter_id()
+        if not counter_id or not self.counter_service:
+            return None
+        counter = self.counter_service.get_counter(counter_id)
+        if not counter or not counter.current_ticket_id:
+            return None
+        return next((t for t in self._tickets if t["number"] == counter.current_ticket_id), None)
+
     def _set_status(self, ticket: dict, new_status: str):
         ticket["status"]  = new_status
         ticket["time"]    = datetime.now().strftime("%H:%M")
-    
-    def _clear_active(self):
-        """Ensure no other ticket is in 'called' state."""
-        for t in self._tickets:
-            if t["status"] == "called":
-                self._clear_counter_for_ticket(t)
-                self._set_status(t, "waiting")
+
+    def _clear_current_counter(self):
+        """Clear the currently selected counter's active ticket only."""
+        ticket = self._selected_counter_ticket()
+        if ticket:
+            self._clear_counter_for_ticket(ticket)
+            if ticket["status"] == "called":
+                self._set_status(ticket, "waiting")
     
     # ── Sidebar button actions ────────────────────────────────────────────────
     def _call_next(self):
@@ -906,38 +1264,41 @@ class AdminPanel(tk.Toplevel):
         waiting_tickets.sort(key=lambda t: self._get_priority_value(t))
         nxt = waiting_tickets[0]
         
-        self._clear_active()
+        self._clear_current_counter()
         self._set_status(nxt, "called")
         self._assign_to_selected_counter(nxt)
         self._refresh_table()
+        self._notify_ticket_change()
     
     def _recall(self):
         skipped = self._find("skipped")
         if not skipped:
             messagebox.showinfo("None Skipped", "No skipped tickets to recall.", parent=self)
             return
-        self._clear_active()
+        self._clear_current_counter()
         self._set_status(skipped, "called")
         self._assign_to_selected_counter(skipped)
         self._refresh_table()
+        self._notify_ticket_change()
     
     def _skip_current(self):
-        active = self._find("called")
+        active = self._selected_counter_ticket()
         if not active:
-            messagebox.showinfo("No Active Ticket", "No ticket is currently being served.", parent=self)
+            messagebox.showinfo("No Active Ticket", "No ticket is currently being served on this counter.", parent=self)
             return
         self._clear_counter_for_ticket(active)
         self._set_status(active, "skipped")
         self._call_next()
     
     def _complete_current(self):
-        active = self._find("called")
+        active = self._selected_counter_ticket()
         if not active:
-            messagebox.showinfo("No Active Ticket", "No ticket is currently being served.", parent=self)
+            messagebox.showinfo("No Active Ticket", "No ticket is currently being served on this counter.", parent=self)
             return
         self._clear_counter_for_ticket(active, increment_served=True)
         self._set_status(active, "completed")
         self._refresh_table()
+        self._notify_ticket_change()
     
     # ── Table row button actions ───────────────────────────────────────────────
     def _selected_ticket(self) -> dict | None:
@@ -955,10 +1316,11 @@ class AdminPanel(tk.Toplevel):
         if t["status"] == "called":
             messagebox.showinfo("Already Called", f"{t['number']} is already active.", parent=self)
             return
-        self._clear_active()
+        self._clear_current_counter()
         self._set_status(t, "called")
         self._assign_to_selected_counter(t)
         self._refresh_table()
+        self._notify_ticket_change()
     
     def _skip_selected(self):
         t = self._selected_ticket()
@@ -967,6 +1329,7 @@ class AdminPanel(tk.Toplevel):
         self._clear_counter_for_ticket(t)
         self._set_status(t, "skipped")
         self._refresh_table()
+        self._notify_ticket_change()
     
     def _complete_selected(self):
         t = self._selected_ticket()
@@ -975,6 +1338,7 @@ class AdminPanel(tk.Toplevel):
         self._clear_counter_for_ticket(t, increment_served=t["status"] == "called")
         self._set_status(t, "completed")
         self._refresh_table()
+        self._notify_ticket_change()
 
 
 # ── Standalone preview ─────────────────────────────────────────────────────────

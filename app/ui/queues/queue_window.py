@@ -6,6 +6,15 @@ from typing import Callable, Optional
 
 from .components import THEME, StyledButton, Divider, SectionHeader
 
+# Optional Pillow support for image resizing
+try:
+    from PIL import Image, ImageTk
+    PIL_AVAILABLE = True
+except Exception:
+    Image = None
+    ImageTk = None
+    PIL_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -47,6 +56,8 @@ class QueueWindow(tk.Toplevel):
         counter: Optional[dict[str, int]] = None,
         daily_limit: Optional[int] = None,
         tickets_issued_today: int = 0,
+        app_name_var: Optional[tk.StringVar] = None,
+        app_logo_var: Optional[tk.StringVar] = None,
         **kwargs
     ) -> None:
         super().__init__(parent, **kwargs)
@@ -54,7 +65,6 @@ class QueueWindow(tk.Toplevel):
         self.geometry("900x750")
         self.minsize(800, 650)
         self.configure(bg=THEME["bg_dark"])
-        self.grab_set()
 
         self._callback = on_ticket_created
         self._daily_limit = daily_limit
@@ -77,6 +87,8 @@ class QueueWindow(tk.Toplevel):
         self._selected_service = tk.StringVar(value=SERVICES[0])
         self._selected_priority = tk.StringVar(value="Regular")
         self._last_ticket: Optional[dict] = None
+        self._app_name_var = app_name_var
+        self._app_logo_var = app_logo_var
 
         self._build()
 
@@ -86,11 +98,79 @@ class QueueWindow(tk.Toplevel):
         # Header
         hdr = tk.Frame(self, bg=THEME["bg_card"], pady=14)
         hdr.pack(fill="x")
-        tk.Label(
-            hdr, text="◈  Queue Ticket",
-            font=("Segoe UI", 15, "bold"),
-            fg=THEME["accent"], bg=THEME["bg_card"],
-        ).pack(padx=pad, anchor="w")
+        # Logo + header text
+        self._logo_image = None
+        logo_lbl = tk.Label(hdr, bg=THEME["bg_card"])
+        logo_lbl.pack(side="left", padx=(pad, 8))
+
+        if getattr(self, "_app_name_var", None) is not None:
+            title_text = f"◈  {self._app_name_var.get()} Ticket"
+            self._hdr_title_var = tk.StringVar(value=title_text)
+            try:
+                self._app_name_var.trace_add("write", lambda *a: self._hdr_title_var.set(f"◈  {self._app_name_var.get()} Ticket"))
+            except Exception:
+                pass
+            tk.Label(
+                hdr, textvariable=self._hdr_title_var,
+                font=("Segoe UI", 15, "bold"),
+                fg=THEME["accent"], bg=THEME["bg_card"],
+            ).pack(padx=pad, anchor="w")
+        else:
+            tk.Label(
+                hdr, text="◈  Queue Ticket",
+                font=("Segoe UI", 15, "bold"),
+                fg=THEME["accent"], bg=THEME["bg_card"],
+            ).pack(padx=pad, anchor="w")
+
+        def _update_logo(*a):
+            path = (self._app_logo_var.get() if self._app_logo_var else "")
+            try:
+                if path:
+                    max_h = 48
+                    max_w = 240
+                    if PIL_AVAILABLE:
+                        try:
+                            im = Image.open(path)
+                            w, h = im.size
+                            ratio = min(1.0, float(max_w) / max(1, w), float(max_h) / max(1, h))
+                            if ratio < 1.0:
+                                new_w = max(1, int(w * ratio))
+                                new_h = max(1, int(h * ratio))
+                                im = im.resize((new_w, new_h), Image.LANCZOS)
+                            img = ImageTk.PhotoImage(im)
+                        except Exception:
+                            img = tk.PhotoImage(file=path)
+                            try:
+                                w, h = img.width(), img.height()
+                                factor = max(1, int(max(1, h) / max_h), int(max(1, w) / max_w))
+                                if factor > 1:
+                                    img = img.subsample(factor, factor)
+                            except Exception:
+                                pass
+                    else:
+                        img = tk.PhotoImage(file=path)
+                        try:
+                            w, h = img.width(), img.height()
+                            factor = max(1, int(max(1, h) / max_h), int(max(1, w) / max_w))
+                            if factor > 1:
+                                img = img.subsample(factor, factor)
+                        except Exception:
+                            pass
+                    self._logo_image = img
+                    logo_lbl.config(image=self._logo_image)
+                else:
+                    logo_lbl.config(image="")
+                    self._logo_image = None
+            except Exception:
+                logo_lbl.config(image="")
+                self._logo_image = None
+
+        if self._app_logo_var is not None:
+            try:
+                self._app_logo_var.trace_add("write", _update_logo)
+            except Exception:
+                pass
+        _update_logo()
         Divider(self).pack(fill="x")
 
         # Main content area with two columns
@@ -114,6 +194,13 @@ class QueueWindow(tk.Toplevel):
         
         self._build_preview(bottom_frame, pad)
         self._build_buttons(bottom_frame, pad)
+
+    def refresh_theme(self):
+        """Refresh this ticket window using the current theme."""
+        self.configure(bg=THEME["bg_dark"])
+        for child in self.winfo_children():
+            child.destroy()
+        self._build()
 
     def _build_left_column(self, parent, pad):
         """Build priority selection column."""
