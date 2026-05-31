@@ -1,15 +1,14 @@
-"""QueueFlow UI Package
+"""QueueFlow Queues Package
 
-Main user interface components for the Queue Management System.
+Queue management UI components for the Queue Management System.
 
-This package contains all UI modules and makes them easily importable:
+This package contains queue-specific UI modules:
 
 Example:
-    from app.ui import Dashboard, QueueWindow, AdminPanel, THEME
+    from app.ui.queues import QueueWindow, AdminPanel
 
 Package Structure:
-    ├── __init__.py           (this file - main UI exports)
-    ├── dashboard.py          → Dashboard class (main display)
+    ├── __init__.py           (this file - component exports)
     ├── queue_window.py       → QueueWindow class (ticket generation)
     ├── admin_panel.py        → AdminPanel class (staff management)
     └── components/
@@ -18,14 +17,12 @@ Package Structure:
         └── widgets.py        → Reusable components (buttons, cards, badges)
 """
 
-# Export main UI classes for easy importing
+# Export queue-related UI classes
 from .components import THEME, StyledButton, TicketCard, StatusBadge, SectionHeader, Divider
-from .dashboard import Dashboard
 from .queue_window import QueueWindow
 from .admin_panel import AdminPanel
 
 __all__ = [
-    "Dashboard",
     "QueueWindow",
     "AdminPanel",
     "THEME",

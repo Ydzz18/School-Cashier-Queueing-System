@@ -1,0 +1,33 @@
+{
+  "queues": {},
+  "users": {},
+  "sessions": {},
+  "tickets_history": [],
+  "settings": {},
+  "counters": {
+    "9212f685-f1a2-4ef0-858c-92ea06d74de6": {
+      "counter_id": "9212f685-f1a2-4ef0-858c-92ea06d74de6",
+      "counter_name": "Cashier 1",
+      "department": "Billing",
+      "status": "active",
+      "current_ticket_id": null,
+      "tickets_served_today": 0,
+      "operator_name": "Maria",
+      "is_active": true,
+      "created_at": "2026-05-31T13:13:30.795673",
+      "last_activity": "2026-05-31T13:13:30.795832"
+    },
+    "523bfae2-ae9f-4afa-8b5a-e0409884eb96": {
+      "counter_id": "523bfae2-ae9f-4afa-8b5a-e0409884eb96",
+      "counter_name": "Cashier 2",
+      "department": "Billing",
+      "status": "active",
+      "current_ticket_id": null,
+      "tickets_served_today": 0,
+      "operator_name": "John",
+      "is_active": true,
+      "created_at": "2026-05-31T13:13:30.796928",
+      "last_activity": "2026-05-31T13:13:30.796934"
+    }
+  }
+}

@@ -45,6 +45,7 @@ import logging
 from typing import Callable, Optional
 
 from .components import THEME, StyledButton, Divider, SectionHeader, StatusBadge
+from app.services.counter_service import CounterService
 
 logger = logging.getLogger(__name__)
 
@@ -508,7 +509,15 @@ class AdminPanel(tk.Toplevel):
     on_change : callable(tickets)  – fired after every state mutation
     """
 
-    def __init__(self, parent, tickets: list = None, on_change=None, **kwargs):
+    def __init__(
+        self,
+        parent,
+        tickets: list = None,
+        on_change=None,
+        counter_service: Optional[CounterService] = None,
+        on_counters_change: Optional[Callable] = None,
+        **kwargs
+    ):
         # First authenticate
         self.auth = AdminAuth()
         
@@ -529,10 +538,13 @@ class AdminPanel(tk.Toplevel):
         # Work on a deep copy so caller controls when it's applied
         self._tickets  = copy.deepcopy(tickets or [])
         self._callback = on_change
+        self.counter_service = counter_service
+        self._counters_callback = on_counters_change
         self.username = "admin"  # Store username for password changes
         
         self._current_number_var = tk.StringVar(value="—")
         self._current_svc_var    = tk.StringVar(value="No active ticket")
+        self._counter_var = tk.StringVar(value="")
         
         self._build()
         self._refresh_table()
@@ -623,6 +635,40 @@ class AdminPanel(tk.Toplevel):
         tk.Frame(side, bg=THEME["bg_dark"], height=16).pack()
         
         SectionHeader(side, "ACTIONS").pack(anchor="w", pady=(0, 8))
+
+        if self.counter_service:
+            active_counters = self.counter_service.get_all_counters(active_only=True)
+            self._counter_ids_by_label = {
+                self._counter_label(counter): counter.counter_id
+                for counter in active_counters
+            }
+            counter_labels = list(self._counter_ids_by_label)
+            if counter_labels:
+                self._counter_var.set(counter_labels[0])
+                tk.Label(
+                    side,
+                    text="Counter",
+                    font=THEME["font_label"],
+                    fg=THEME["text_dim"],
+                    bg=THEME["bg_dark"],
+                ).pack(anchor="w", pady=(0, 3))
+                ttk.Combobox(
+                    side,
+                    textvariable=self._counter_var,
+                    values=counter_labels,
+                    state="readonly",
+                    width=24,
+                ).pack(fill="x", pady=(0, 8))
+            else:
+                self._counter_ids_by_label = {}
+                tk.Label(
+                    side,
+                    text="No active counters configured",
+                    font=THEME["font_small"],
+                    fg=THEME["warning"],
+                    bg=THEME["bg_dark"],
+                    wraplength=190,
+                ).pack(anchor="w", pady=(0, 8))
         
         StyledButton(side, "▶  Call Next",   preset="primary",
                      command=self._call_next).pack(fill="x", pady=3)
@@ -737,6 +783,45 @@ class AdminPanel(tk.Toplevel):
             "Regular": 3
         }
         return priority_map.get(ticket.get("priority", "Regular"), 4)
+
+    def _counter_label(self, counter) -> str:
+        """Return display text for a counter dropdown option."""
+        label = counter.counter_name
+        if counter.department:
+            label = f"{label} ({counter.department})"
+        return label
+
+    def _selected_counter_id(self) -> str | None:
+        """Return selected counter ID, if counter support is enabled."""
+        if not self.counter_service:
+            return None
+        return getattr(self, "_counter_ids_by_label", {}).get(self._counter_var.get())
+
+    def _notify_counters_changed(self) -> None:
+        """Notify the parent window that counter state has changed."""
+        if self.counter_service and callable(self._counters_callback):
+            self._counters_callback(self.counter_service.get_all_counters())
+
+    def _assign_to_selected_counter(self, ticket: dict) -> None:
+        """Assign a called ticket to the selected counter."""
+        counter_id = self._selected_counter_id()
+        if not counter_id:
+            return
+        self.counter_service.assign_ticket_to_counter(counter_id, ticket["number"])
+        self._notify_counters_changed()
+
+    def _clear_counter_for_ticket(self, ticket: dict, increment_served: bool = False) -> None:
+        """Clear a ticket from whichever counter is serving it."""
+        if not self.counter_service:
+            return
+
+        for counter in self.counter_service.get_all_counters():
+            if counter.current_ticket_id == ticket["number"]:
+                if increment_served:
+                    self.counter_service.increment_counter_tickets(counter.counter_id)
+                self.counter_service.clear_ticket_from_counter(counter.counter_id)
+
+        self._notify_counters_changed()
     
     # ── Table refresh ─────────────────────────────────────────────────────────
     def _refresh_table(self):
@@ -805,6 +890,7 @@ class AdminPanel(tk.Toplevel):
         """Ensure no other ticket is in 'called' state."""
         for t in self._tickets:
             if t["status"] == "called":
+                self._clear_counter_for_ticket(t)
                 self._set_status(t, "waiting")
     
     # ── Sidebar button actions ────────────────────────────────────────────────
@@ -822,6 +908,7 @@ class AdminPanel(tk.Toplevel):
         
         self._clear_active()
         self._set_status(nxt, "called")
+        self._assign_to_selected_counter(nxt)
         self._refresh_table()
     
     def _recall(self):
@@ -831,6 +918,7 @@ class AdminPanel(tk.Toplevel):
             return
         self._clear_active()
         self._set_status(skipped, "called")
+        self._assign_to_selected_counter(skipped)
         self._refresh_table()
     
     def _skip_current(self):
@@ -838,6 +926,7 @@ class AdminPanel(tk.Toplevel):
         if not active:
             messagebox.showinfo("No Active Ticket", "No ticket is currently being served.", parent=self)
             return
+        self._clear_counter_for_ticket(active)
         self._set_status(active, "skipped")
         self._call_next()
     
@@ -846,6 +935,7 @@ class AdminPanel(tk.Toplevel):
         if not active:
             messagebox.showinfo("No Active Ticket", "No ticket is currently being served.", parent=self)
             return
+        self._clear_counter_for_ticket(active, increment_served=True)
         self._set_status(active, "completed")
         self._refresh_table()
     
@@ -867,12 +957,14 @@ class AdminPanel(tk.Toplevel):
             return
         self._clear_active()
         self._set_status(t, "called")
+        self._assign_to_selected_counter(t)
         self._refresh_table()
     
     def _skip_selected(self):
         t = self._selected_ticket()
         if not t:
             return
+        self._clear_counter_for_ticket(t)
         self._set_status(t, "skipped")
         self._refresh_table()
     
@@ -880,6 +972,7 @@ class AdminPanel(tk.Toplevel):
         t = self._selected_ticket()
         if not t:
             return
+        self._clear_counter_for_ticket(t, increment_served=t["status"] == "called")
         self._set_status(t, "completed")
         self._refresh_table()
 

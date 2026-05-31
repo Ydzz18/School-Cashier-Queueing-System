@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from datetime import datetime
 import logging
 from typing import Callable, Optional
@@ -45,6 +45,8 @@ class QueueWindow(tk.Toplevel):
         parent: tk.Widget,
         on_ticket_created: Optional[Callable[[dict], None]] = None,
         counter: Optional[dict[str, int]] = None,
+        daily_limit: Optional[int] = None,
+        tickets_issued_today: int = 0,
         **kwargs
     ) -> None:
         super().__init__(parent, **kwargs)
@@ -55,6 +57,8 @@ class QueueWindow(tk.Toplevel):
         self.grab_set()
 
         self._callback = on_ticket_created
+        self._daily_limit = daily_limit
+        self._tickets_issued_today = tickets_issued_today
         if counter is None:
             self._counter: dict[str, int] = {
                 "current": 0,
@@ -382,6 +386,14 @@ class QueueWindow(tk.Toplevel):
                      command=self.destroy).pack(side="right")
 
     def _generate_ticket(self):
+        if self._daily_limit is not None and self._tickets_issued_today >= self._daily_limit:
+            messagebox.showwarning(
+                "Daily Ticket Limit Reached",
+                f"The daily ticket limit of {self._daily_limit} has already been reached.",
+                parent=self,
+            )
+            return
+
         service = self._selected_service.get()
         priority = self._selected_priority.get()
         prefix = PRIORITIES[priority]["code"]
@@ -392,6 +404,7 @@ class QueueWindow(tk.Toplevel):
         
         number = f"{prefix}-{self._counter[counter_key]:03d}"
         now_str = datetime.now().strftime("%H:%M")
+        today_str = datetime.now().date().isoformat()
 
         ticket = {
             "number": number,
@@ -401,6 +414,7 @@ class QueueWindow(tk.Toplevel):
             "priority_order": PRIORITIES[priority]["order"],
             "status": "waiting",
             "time": now_str,
+            "date": today_str,
         }
         self._last_ticket = ticket
 
@@ -460,6 +474,7 @@ class QueueWindow(tk.Toplevel):
 
         if callable(self._callback):
             self._callback(ticket)
+        self._tickets_issued_today += 1
 
 
 if __name__ == "__main__":

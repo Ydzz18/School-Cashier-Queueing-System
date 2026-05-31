@@ -27,7 +27,8 @@ class DatabaseManager:
             'users': {},
             'sessions': {},
             'tickets_history': [],
-            'settings': {}
+            'settings': {},
+            'counters': {}
         }
     
     def save_database(self) -> bool:
@@ -123,4 +124,7 @@ class DatabaseManager:
         self.data['tickets_history'].append(ticket.to_dict())
         return self.save_database()
     
-    def get_tickets_history(self, limit: int = 100) -> List[Ticke
+    def get_tickets_history(self, limit: int = 100) -> List[Ticket]:
+        """Retrieves historical ticket records, optionally limited to most recent."""
+        history = self.data.get('tickets_history', [])
+        return [Ticket.from_dict(t) for t in history[-limit:]]

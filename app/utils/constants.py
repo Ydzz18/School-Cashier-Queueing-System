@@ -39,6 +39,7 @@ os.makedirs(LOG_PATH, exist_ok=True)
 
 # Queue configuration
 MAX_QUEUE_SIZE = 200
+DAILY_TICKET_LIMIT = MAX_QUEUE_SIZE
 TICKET_EXPIRY_MINUTES = 120  # 2 hours before ticket expires
 WINDOW_WIDTH = 1200
 WINDOW_HEIGHT = 700
